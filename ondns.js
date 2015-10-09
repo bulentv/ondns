@@ -9,13 +9,12 @@ var FLAG_NOP = 0xff;
 var TYPE_TXT = 0x0c;
 
 function OnDNS() {
-  this.SENDBUFFER = []; 
-  this.RECVBUFFER = []; 
+  this.QUEUE = []; 
   this.s = dgram.createSocket("udp4");
   this.appClient = null;
   this.appServer = null;
   this.id = 0;
-  this.args = {};
+  this.NOPStart = -1;
 }
 
 OnDNS.prototype.init = function() {
@@ -55,24 +54,39 @@ OnDNS.prototype.init = function() {
   }
 
 
-  this.args.mode = iargs.m || iargs.mode || 'server';
-  this.args.appmode = iargs.a || iargs.appmode || 'listen';
-  this.args.domain = iargs.d || iargs.domain || 'x.co';
-  this.args.dnsport = parseInt( iargs.dnsport );
-  this.args.dnsip = iargs.dnsip;
-  this.args.clientport = parseInt( iargs.c || iargs.clientport ) || 5354;
-  this.args.appport = parseInt( iargs.appport );
-  this.args.appip = iargs.appip;
-  this.args.sliceSize = parseInt(iargs.s || iargs['slice-size']) || 128;
+  this.mode = iargs.m || iargs.mode || 'server';
+  this.appmode = iargs.a || iargs.appmode || 'listen';
+  this.domain = iargs.d || iargs.domain || 'x.co';
+  this.dnsport = parseInt( iargs.dnsport );
+  this.dnsip = iargs.dnsip;
+  this.clientport = parseInt( iargs.c || iargs.clientport ) || 5354;
+  this.appport = parseInt( iargs.appport );
+  this.appip = iargs.appip;
+  this.sliceSize = parseInt(iargs.s || iargs['slice-size']) || 128;
 
   if( iargs.h || iargs.help || !iargs.appip || !iargs.appport || !iargs.dnsip || !iargs.dnsport ) {
     return -1;
   }
 };
 
+OnDNS.prototype.LOG = function() {
+  return;
+  console.log.apply(this, arguments);
+};
+
+OnDNS.prototype.start = function() {
+  
+  if(this.mode == 'server') {
+    this.startServer();
+    this.listenApp();
+  }else{
+    this.startClient();
+  }
+
+};
 
 OnDNS.prototype.showUsage = function() {
-  console.log(""+
+  this.LOG(""+
     "Usage : \n"+
     "dnstunnel [-d domain] [-m server|client] [ -c clientport ] [-s slicesize] dnsip:dnsport:appip:appport\n"
   );
@@ -172,147 +186,6 @@ OnDNS.prototype.buildPacket = function( packet ) {
 
 }
 
-OnDNS.prototype.listenApp = function() {
-
-  var self = this;
-  self.appServer = net.createServer( function(c) {
-    console.log("client connected");
-    self.addChunk(new Buffer('CON'));
-
-    c.on('close', function() {
-      console.log("client connection ended");
-      self.addChunk(new Buffer('END'));
-    });
-
-    c.on('data', function(data) {
-      self.addChunk(data);
-    });
-
-    self.appClient = c;
-  });
-
-  this.appServer.listen(this.args.appport, this.args.appip, function() {
-    console.log("server bound");
-  });
-}
-
-OnDNS.prototype.connectApp = function() {
-  console.log("Connect Cmd Received2");
-  this.appClient = new net.Socket();
-
-  console.log("Connecting to " + this.appip + ":" + this.appport);
-  this.appClient.connect(this.args.appport, this.args.appip,
-    function() { //'connect' listener
-      console.log('connected to server!');
-    }
-  );
-
-  this.appClient.on('data', function(data) {
-    console.log(data.toString());
-  });
-
-  this.appClient.on('end', function() {
-    console.log('disconnected from server');
-  });
-}
-
-OnDNS.prototype.disconnectApp = function() {
-  console.log("Disconnect Cmd Received2");
-  this.appClient.close();
-}
-
-OnDNS.prototype.start = function() {
-  
-  if(this.args.mode == 'server') {
-    this.startServer();
-    //this.listenApp();
-  }else
-  {
-    this.startClient();
-  }
-
-};
-
-OnDNS.prototype.startServer = function() {
-  var self = this;
-  self.s.on('error', function(err) {
-    console.error(err);
-    self.s.close();
-  });
-  self.s.on('message', function(data, remote) {
-    var q = self.parsePacket(data);
-    console.log(remote,q);
-    
-    var packet = self.getNextPacketOrNOP();
-    var buffer = self.buildPacket(packet);
-    self.s.send(buffer, 0, buffer.length, remote.port, remote.address, function(err) {
-    });
-
-  });
-  self.s.on('listening', function() {
-    var address = self.s.address();
-    console.log("Listening " + address.address + ":" + address.port)
-  });
-  self.s.bind(self.args.dnsport, self.args.dnsip);
-};
-
-OnDNS.prototype.startClient = function() {
-
-  var self = this;
-
-  self.s.bind( self.args.clientport, '0.0.0.0');
-
-  self.s.on('message', function(data) {
-    var packet = self.parsePacket(data);
-    console.log(packet);
-  });
-
-  var consumer;
-  consumer = function() {
-    var packet = self.getNextPacketOrNOP();
-    var buffer = self.buildPacket(packet);
-    self.s.send(buffer, 0, buffer.length, self.args.dnsport, self.args.dnsip, function(err) {
-      setTimeout( consumer, packet.flag == FLAG_NOP ? 1000 : 30);
-    });
-  };
-  consumer();
-};
-
-OnDNS.prototype.getNextPacketOrNOP = function() {
-
-  var data = this.SENDBUFFER.shift();
-
-  if(data && data.length) {
-    return {
-      id:++this.id % 0xffff,
-      flag:FLAG_DATA,
-      data:data,
-      query:true,
-      domain:this.args.domain
-    };
-  }else{
-    return {
-      id:++this.id % 0xffff,
-      flag:FLAG_NOP,
-      data:new Buffer("NOP"),
-      query:true,
-      domain:this.args.domain
-    };
-  }
-};
-
-OnDNS.prototype.addChunk = function(chunk) {
-  var self = this;
-  if(!chunk || !chunk.length) return;
-  var start = 0;
-  do{
-    var end = start + Math.min(self.args.sliceSize, chunk.length - start);
-    var c = chunk.slice(start, end);
-    start += c.length;
-    this.SENDBUFFER.push(c);
-  }while(start<chunk.length);
-};
-
 OnDNS.prototype.parsePacket = function(buffer) {
   var packet = {};
   packet.id = buffer.readUInt16BE(0);
@@ -347,7 +220,213 @@ OnDNS.prototype.parsePacket = function(buffer) {
   }
 
   return packet;
+};
+
+OnDNS.prototype.setAppSock = function(appsock) {
+
+  var self = this;
+  
+  appsock.on('data', function(data) {
+    self.LOG("Got "+data.length+" bytes from the app");
+    self.queue({data:data});
+  });
+
+  appsock.on('close', function() {
+    self.LOG("client connection ended");
+    self.appsock = null;
+    self.queue({code:FLAG_DISCONNECT});
+  });
+
+  self.appsock = appsock;
+
+};
+
+OnDNS.prototype.listenApp = function() {
+
+  var self = this;
+  self.appServer = net.createServer( function(appsock) {
+    self.LOG("client connected");
+    self.queue({code:FLAG_CONNECT});
+    self.setAppSock(appsock);
+  });
+
+  this.appServer.listen(this.appport, this.appip, function() {
+    self.LOG("server bound");
+  });
 }
+
+OnDNS.prototype.connectApp = function() {
+  
+  var self = this;
+
+  var appsock = new net.Socket();
+
+  appsock.connect(this.appport, this.appip, function() {
+    self.LOG('connected to server!');
+    self.setAppSock(appsock);
+  });
+
+}
+
+OnDNS.prototype.disconnectApp = function() {
+
+  if(this.appsocket) {
+    this.appsocket.close();
+  }
+
+}
+
+OnDNS.prototype.startServer = function() {
+  var self = this;
+  self.s.on('error', function(err) {
+    console.error(err);
+    self.s.close();
+  });
+  self.s.on('message', function(data, remote) {
+    self.processPacket(self.parsePacket(data));
+    
+    var packet = self.getNextPacketOrNOP();
+    var buffer = self.buildPacket(packet);
+    self.s.send(buffer, 0, buffer.length, remote.port, remote.address, function(err) {
+    });
+
+  });
+  self.s.on('listening', function() {
+    var address = self.s.address();
+    self.LOG("Listening " + address.address + ":" + address.port)
+  });
+  self.s.bind(self.dnsport, self.dnsip);
+};
+
+OnDNS.prototype.processPacket = function(packet) {
+
+  var self = this;
+
+  switch(packet.flag) {
+
+    case FLAG_CONNECT:
+      self.LOG("Connect cmd received");
+      self.connectApp();
+      break;
+
+    case FLAG_DISCONNECT:
+      self.LOG("Disconnect cmd received");
+      self.disconnectApp();
+      break;
+
+    case FLAG_DATA:
+      if(self.appsock) {
+        self.appsock.write(packet.data);
+      }
+      break;
+
+    default:
+      break;
+  }
+};
+
+OnDNS.prototype.checkNOPThrottle = function() {
+  var now = (new Date()).getTime();
+  if(this.NOPStart != -1) {
+    if(now - this.NOPStart > 2000) {
+      return true;
+    }
+    return false;
+  }else{
+    this.NOPStart = now;
+    return false;
+  }
+};
+
+OnDNS.prototype.resetNOPThrottle = function() {
+  this.NOPStart = -1;
+};
+
+OnDNS.prototype.startClient = function() {
+
+  var self = this;
+
+  self.s.bind( self.clientport, '0.0.0.0');
+
+  self.s.on('message', function(data) {
+    self.processPacket(self.parsePacket(data));
+  });
+
+  var consumer;
+  consumer = function() {
+    var packet = self.getNextPacketOrNOP();
+    var buffer = self.buildPacket(packet);
+
+    if(packet.flag == FLAG_NOP) {
+      to = self.checkNOPThrottle() ? 1000 : 0;
+      if(!self.appsock)
+        to = 5000;
+    }else{
+      self.resetNOPThrottle();
+      to = 0;
+    }
+
+    self.s.send(buffer, 0, buffer.length, self.dnsport, self.dnsip, function(err) {
+      setTimeout( consumer, to);
+    });
+  };
+  consumer();
+};
+
+OnDNS.prototype.getNextPacketOrNOP = function() {
+
+  var item = this.QUEUE.shift();
+
+  if(item && item.chunk) {
+    this.LOG("Consuming data packet");
+    return {
+      id:++this.id % 0xffff,
+      flag:FLAG_DATA,
+      data:item.chunk,
+      query:this.mode == "client",
+      domain:this.domain
+    };
+  }else
+  if(item && item.code){
+    this.LOG("Consuming code packet");
+    return {
+      id:++this.id % 0xffff,
+      flag:item.code,
+      data:new Buffer("#"),
+      query:this.mode == "client",
+      domain:this.domain
+    };
+  }else{
+    this.LOG("Consuming NOP packet");
+    return {
+      id:++this.id % 0xffff,
+      flag:FLAG_NOP,
+      data:new Buffer("#"),
+      query:this.mode == "client",
+      domain:this.domain
+    };
+  }
+};
+
+OnDNS.prototype.queue = function(item) {
+
+
+  if(item.code) {
+    this.LOG("Queuing code packet");
+    return this.QUEUE.push({code:item.code});
+  }else{
+    if(!item.data || !item.data.length) return;
+    this.LOG("Queuing data packet");
+
+    var start = 0;
+    do{
+      var end = start + Math.min(this.sliceSize, item.data.length - start);
+      var chunk = item.data.slice(start, end);
+      start += chunk.length;
+      this.QUEUE.push({chunk:chunk});
+    }while(start<item.data.length);
+  }
+};
 
 var ondns = new OnDNS();
 if(ondns.init() == -1) {
