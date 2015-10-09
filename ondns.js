@@ -8,10 +8,18 @@ var FLAG_NOP = 0xff;
 
 var TYPE_TXT = 0x0c;
 
+function OnDNS() {
+  this.SENDBUFFER = []; 
+  this.RECVBUFFER = []; 
+  this.s = dgram.createSocket("udp4");
+  this.appClient = null;
+  this.appServer = null;
+  this.id = 0;
+  this.args = {};
+}
 
-function _init(fakeDNS) {
-
-  var iargs = {}, args = {};
+OnDNS.prototype.init = function() {
+  var iargs = {};
   
   if(process.argv.length <= 2) {
     iargs['help'] = true;
@@ -47,79 +55,30 @@ function _init(fakeDNS) {
   }
 
 
-  args.mode = iargs.m || iargs.mode || 'server';
-  args.appmode = iargs.a || iargs.appmode || 'listen';
-  args.domain = iargs.d || iargs.domain || 'x.co';
-  args.dnsport = parseInt( iargs.dnsport );
-  args.dnsip = iargs.dnsip;
-  args.clientport = parseInt( iargs.c || iargs.clientport ) || 5354;
-  args.appport = parseInt( iargs.appport );
-  args.appip = iargs.appip;
-  args.sliceSize = parseInt(iargs.s || iargs['slice-size']) || 128;
+  this.args.mode = iargs.m || iargs.mode || 'server';
+  this.args.appmode = iargs.a || iargs.appmode || 'listen';
+  this.args.domain = iargs.d || iargs.domain || 'x.co';
+  this.args.dnsport = parseInt( iargs.dnsport );
+  this.args.dnsip = iargs.dnsip;
+  this.args.clientport = parseInt( iargs.c || iargs.clientport ) || 5354;
+  this.args.appport = parseInt( iargs.appport );
+  this.args.appip = iargs.appip;
+  this.args.sliceSize = parseInt(iargs.s || iargs['slice-size']) || 128;
 
   if( iargs.h || iargs.help || !iargs.appip || !iargs.appport || !iargs.dnsip || !iargs.dnsport ) {
-    return showUsage();
+    return -1;
   }
-  
-  var fd = new fakeDNS(args);
-  fd.start()
-}
+};
 
-function showUsage() {
+
+OnDNS.prototype.showUsage = function() {
   console.log(""+
     "Usage : \n"+
     "dnstunnel [-d domain] [-m server|client] [ -c clientport ] [-s slicesize] dnsip:dnsport:appip:appport\n"
   );
-}
+};
 
-fakeDNS = function(args) {
-
-  this.args = args;
-  this.SENDBUFFER = []; 
-  this.RECVBUFFER = []; 
-  this.s = dgram.createSocket("udp4");
-  this.appClient = null;
-  this.appServer = null;
-  this.id = 0;
-}
-
-fakeDNS.prototype.parsePacket = function(buffer) {
-  var packet = {};
-  packet.id = buffer.readUInt16BE(0);
-  var Flags = buffer.readUInt16BE(2);
-  packet.query = (Flags >> 15) == 0;
-
-  var pos = 0x0c;
-  if(packet.query) {
-    var l = buffer.readUInt8(pos); pos++;
-    var dataBuffer = new Buffer(buffer.slice(pos,pos+l).toString("ascii"),"base64"); pos += l;
-    packet.id = dataBuffer.readUInt16BE(0);
-    packet.flag = dataBuffer.readUInt16BE(2);
-    packet.data = dataBuffer.slice(4);
-  
-    l = buffer.readUInt8(pos); pos++;
-    var dom = buffer.slice(pos,pos+l).toString("ascii"); pos += l;
-    
-    l = buffer.readUInt8(pos); pos++;
-    var tld = buffer.slice(pos,pos+l).toString("ascii"); pos += l;
-
-    packet.domain = dom + '.' + tld;
-  }else{
-    pos += 10;
-    // 0x0c
-    pos++;
-    var l = buffer.readUInt16BE(pos); pos += 2;
-    var dataBuffer = new Buffer(buffer.slice(pos,pos+l).toString("ascii"),"base64"); pos += l;
-    
-    packet.id = dataBuffer.readUInt16BE(0);
-    packet.flag = dataBuffer.readUInt16BE(2);
-    packet.data = dataBuffer.slice(4);
-  }
-
-  return packet;
-}
-
-fakeDNS.prototype.buildPacket = function( packet ) {
+OnDNS.prototype.buildPacket = function( packet ) {
   //id, flag, data, query) {
   var nId = 2, nFlag = 2;
   var dataLength = nId + nFlag + packet.data.length;
@@ -213,7 +172,7 @@ fakeDNS.prototype.buildPacket = function( packet ) {
 
 }
 
-fakeDNS.prototype.listenApp = function() {
+OnDNS.prototype.listenApp = function() {
 
   var self = this;
   self.appServer = net.createServer( function(c) {
@@ -237,7 +196,7 @@ fakeDNS.prototype.listenApp = function() {
   });
 }
 
-fakeDNS.prototype.connectApp = function() {
+OnDNS.prototype.connectApp = function() {
   console.log("Connect Cmd Received2");
   this.appClient = new net.Socket();
 
@@ -257,12 +216,12 @@ fakeDNS.prototype.connectApp = function() {
   });
 }
 
-fakeDNS.prototype.disconnectApp = function() {
+OnDNS.prototype.disconnectApp = function() {
   console.log("Disconnect Cmd Received2");
   this.appClient.close();
 }
 
-fakeDNS.prototype.start = function() {
+OnDNS.prototype.start = function() {
   
   if(this.args.mode == 'server') {
     this.startServer();
@@ -274,7 +233,7 @@ fakeDNS.prototype.start = function() {
 
 };
 
-fakeDNS.prototype.startServer = function() {
+OnDNS.prototype.startServer = function() {
   var self = this;
   self.s.on('error', function(err) {
     console.error(err);
@@ -297,7 +256,7 @@ fakeDNS.prototype.startServer = function() {
   self.s.bind(self.args.dnsport, self.args.dnsip);
 };
 
-fakeDNS.prototype.startClient = function() {
+OnDNS.prototype.startClient = function() {
 
   var self = this;
 
@@ -319,7 +278,7 @@ fakeDNS.prototype.startClient = function() {
   consumer();
 };
 
-fakeDNS.prototype.getNextPacketOrNOP = function() {
+OnDNS.prototype.getNextPacketOrNOP = function() {
 
   var data = this.SENDBUFFER.shift();
 
@@ -342,7 +301,7 @@ fakeDNS.prototype.getNextPacketOrNOP = function() {
   }
 };
 
-fakeDNS.prototype.addChunk = function(chunk) {
+OnDNS.prototype.addChunk = function(chunk) {
   var self = this;
   if(!chunk || !chunk.length) return;
   var start = 0;
@@ -354,5 +313,47 @@ fakeDNS.prototype.addChunk = function(chunk) {
   }while(start<chunk.length);
 };
 
-_init(fakeDNS);
+OnDNS.prototype.parsePacket = function(buffer) {
+  var packet = {};
+  packet.id = buffer.readUInt16BE(0);
+  var Flags = buffer.readUInt16BE(2);
+  packet.query = (Flags >> 15) == 0;
+
+  var pos = 0x0c;
+  if(packet.query) {
+    var l = buffer.readUInt8(pos); pos++;
+    var dataBuffer = new Buffer(buffer.slice(pos,pos+l).toString("ascii"),"base64"); pos += l;
+    packet.id = dataBuffer.readUInt16BE(0);
+    packet.flag = dataBuffer.readUInt16BE(2);
+    packet.data = dataBuffer.slice(4);
+  
+    l = buffer.readUInt8(pos); pos++;
+    var dom = buffer.slice(pos,pos+l).toString("ascii"); pos += l;
+    
+    l = buffer.readUInt8(pos); pos++;
+    var tld = buffer.slice(pos,pos+l).toString("ascii"); pos += l;
+
+    packet.domain = dom + '.' + tld;
+  }else{
+    pos += 10;
+    // 0x0c
+    pos++;
+    var l = buffer.readUInt16BE(pos); pos += 2;
+    var dataBuffer = new Buffer(buffer.slice(pos,pos+l).toString("ascii"),"base64"); pos += l;
+    
+    packet.id = dataBuffer.readUInt16BE(0);
+    packet.flag = dataBuffer.readUInt16BE(2);
+    packet.data = dataBuffer.slice(4);
+  }
+
+  return packet;
+}
+
+var ondns = new OnDNS();
+if(ondns.init() == -1) {
+  ondns.showUsage();
+  process.exit(0);
+}else{
+  ondns.start();
+}
 
